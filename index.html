@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#08111f">
-<title>ONO Spin Analyzer Clean Ver0.1.0</title>
+<title>ONO Spin Analyzer Ver0.6-CoastPost</title>
 <style>
 :root{--bg:#07111f;--panel:#111827;--text:#f8fafc;--muted:#94a3b8;--gold:#facc15;--red:#ef4444;--green:#22c55e;--blue:#38bdf8;--orange:#fb923c}
 *{box-sizing:border-box}
@@ -29,12 +29,12 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
 </style>
 </head>
 <body>
-<div class="version">Clean Ver 0.1.0</div>
+<div class="version">Ver 0.6-CoastPost</div>
 <header>
  <div class="brand">ONOザウルス研究所 by ONOSOKKI</div>
  <div class="title">ONO Spin Analyzer</div>
- <div class="copy">高速計測優先・ログなし版</div>
- <div class="sub">ログ処理を完全に外し、計測安定性だけを確認します</div>
+ <div class="copy">700rpm Master＋終了後推定モデル</div>
+ <div class="sub">計測ロジックは変更せず、700rpm以下の履歴から停止後に推定最大RPMを算出します</div>
 </header>
 
 <div class="wrap">
@@ -49,7 +49,7 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <span id="phaseBadge" class="badge">IDLE</span>
   <div class="status" id="status">最初に「カメラ起動」を押してください。</div>
   <div class="bar"><div id="confFill" class="fill"></div></div>
-  <div class="small">この版はログ保存なしです。処理負荷を最小化し、純粋な計測性能を確認します。</div>
+  <div class="small">計測部は700rpm Masterのままです。700rpm以下の実測履歴だけを使い、停止後に惰行モデルを作成します。</div>
  </section>
 
  <div class="camera">
@@ -67,6 +67,10 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <div class="card"><div class="label">Blob面積</div><div class="value"><span id="blobArea">0</span> <span class="unit">px</span></div></div>
   <div class="card"><div class="label">角度</div><div class="value"><span id="angleDeg">0</span> <span class="unit">deg</span></div></div>
   <div class="card"><div class="label">処理状態</div><div class="value"><span id="stateText">待機</span></div></div>
+  <div class="card"><div class="label">推定最大RPM</div><div class="value"><span id="estimatedMaxRpm">--</span> <span class="unit">rpm</span></div></div>
+  <div class="card"><div class="label">採用モデル</div><div class="value"><span id="modelName">待機</span></div></div>
+  <div class="card"><div class="label">学習点数</div><div class="value"><span id="modelSampleCount">0</span> <span class="unit">点</span></div></div>
+  <div class="card"><div class="label">モデル精度</div><div class="value"><span id="modelR2">--</span></div></div>
  </div>
 
  <div class="graph"><canvas id="chart"></canvas></div>
@@ -91,6 +95,7 @@ let stream=null, loopStarted=false, measuring=false;
 let rpm=0, maxRpm=0, lastRawAngle=null, unwrappedAngle=0, angleHist=[], lastCenter=null;
 let samples=[], frameTimes=[], measuredFps=0, reliableMaxRpm=0;
 let currentFeature=null, confidence=0, phase="IDLE";
+let coastSamples=[], lastCoastSampleTime=0, measureStartTime=0, coastResult=null;
 
 const defaults={yellowMin:80,blackMax:105,searchRadius:40,innerRate:16,fitWindow:260,maxValid:1200,minBlob:10};
 const settings={...defaults};
@@ -161,9 +166,17 @@ $("cameraBtn").onclick=initCamera;
 $("measureBtn").onclick=()=>{
   measuring=true; setPhase("TRACKING");
   rpm=0; lastRawAngle=null; unwrappedAngle=0; angleHist=[]; samples=[];
+  coastSamples=[]; lastCoastSampleTime=0; measureStartTime=performance.now(); coastResult=null;
+  $("estimatedMaxRpm").textContent="--"; $("modelName").textContent="学習中"; $("modelSampleCount").textContent="0"; $("modelR2").textContent="--";
   $("status").textContent="計測中。ログなし・高速優先モードです。";
 };
-$("stopBtn").onclick=()=>{measuring=false;setPhase("IDLE");$("status").textContent="停止しました。";};
+$("stopBtn").onclick=()=>{
+  measuring=false;
+  setPhase("IDLE");
+  coastResult=estimateCoastMaxRpm(coastSamples, measureStartTime, maxRpm);
+  updateCoastResultUI(coastResult);
+  $("status").textContent=coastResult ? `停止しました。${coastResult.name}モデルで推定最大RPMを算出しました。` : "停止しました。推定モデル作成にはデータ点数が不足しています。";
+};
 $("resetBtn").onclick=()=>{maxRpm=0;$("maxRpm").textContent="0";};
 
 function normalize(d){while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;return d;}
@@ -303,6 +316,84 @@ function updateAngle(angle,now){
   lastRawAngle=angle;
 }
 
+
+function collectCoastSample(now){
+  if(!measuring)return;
+  if(rpm>=120 && rpm<=700 && confidence>=30 && now-lastCoastSampleTime>100){
+    lastCoastSampleTime=now;
+    coastSamples.push({t:now, rpm:rpm});
+    if(coastSamples.length>120)coastSamples.shift();
+    $("modelSampleCount").textContent=coastSamples.length;
+  }
+}
+function linFit(points, transformY, invY, name){
+  if(points.length<12)return null;
+  const t0=points[0].t;
+  let xs=[], ys=[];
+  for(const p of points){
+    const y=transformY(p.rpm);
+    if(!isFinite(y))continue;
+    xs.push((p.t-t0)/1000); ys.push(y);
+  }
+  const n=xs.length; if(n<12)return null;
+  const sx=xs.reduce((a,b)=>a+b,0), sy=ys.reduce((a,b)=>a+b,0);
+  const sxx=xs.reduce((a,b)=>a+b*b,0), sxy=xs.reduce((a,_,i)=>a+xs[i]*ys[i],0);
+  const den=n*sxx-sx*sx; if(Math.abs(den)<1e-9)return null;
+  const b=(n*sxy-sx*sy)/den, a=(sy-b*sx)/n;
+  if(b>=0)return null;
+  const pred=(t)=>invY(a+b*((t-t0)/1000));
+  return score(points,pred,name,{a,b,t0});
+}
+function quadFit(points){
+  if(points.length<18)return null;
+  const t0=points[0].t;
+  const xs=points.map(p=>(p.t-t0)/1000), ys=points.map(p=>p.rpm);
+  let n=xs.length,sx=0,sx2=0,sx3=0,sx4=0,sy=0,sxy=0,sx2y=0;
+  for(let i=0;i<n;i++){let x=xs[i],y=ys[i],x2=x*x;sx+=x;sx2+=x2;sx3+=x2*x;sx4+=x2*x2;sy+=y;sxy+=x*y;sx2y+=x2*y;}
+  const sol=solve3([[n,sx,sx2],[sx,sx2,sx3],[sx2,sx3,sx4]],[sy,sxy,sx2y]); if(!sol)return null;
+  const [a,b,c]=sol; if(b>=50)return null;
+  const pred=(t)=>{const x=(t-t0)/1000; return a+b*x+c*x*x;};
+  return score(points,pred,"quadratic",{a,b,c,t0});
+}
+function score(points,pred,name,param){
+  const mean=points.reduce((s,p)=>s+p.rpm,0)/points.length;
+  let ssTot=0,ssRes=0;
+  for(const p of points){const y=p.rpm, yp=pred(p.t); ssTot+=(y-mean)*(y-mean); ssRes+=(y-yp)*(y-yp);}
+  return {name,param,pred,r2:ssTot>0?1-ssRes/ssTot:0,n:points.length};
+}
+function solve3(A,b){
+  const m=A.map((r,i)=>[...r,b[i]]);
+  for(let i=0;i<3;i++){
+    let max=i; for(let k=i+1;k<3;k++)if(Math.abs(m[k][i])>Math.abs(m[max][i]))max=k;
+    if(Math.abs(m[max][i])<1e-12)return null; [m[i],m[max]]=[m[max],m[i]];
+    const div=m[i][i]; for(let j=i;j<4;j++)m[i][j]/=div;
+    for(let k=0;k<3;k++){if(k===i)continue; const f=m[k][i]; for(let j=i;j<4;j++)m[k][j]-=f*m[i][j];}
+  }
+  return [m[0][3],m[1][3],m[2][3]];
+}
+function estimateCoastMaxRpm(points,startTime,measuredMax){
+  if(points.length<12)return null;
+  const models=[
+    linFit(points,y=>y,y=>y,"linear"),
+    quadFit(points),
+    linFit(points,y=>Math.log(y),y=>Math.exp(y),"exponential")
+  ].filter(m=>m && isFinite(m.r2));
+  if(!models.length)return null;
+  models.sort((a,b)=>b.r2-a.r2);
+  const best=models[0];
+  let est=best.pred(startTime);
+  if(!isFinite(est)||est<0)est=measuredMax;
+  est=Math.max(est,measuredMax);
+  return {name:best.name,r2:best.r2,n:best.n,estimatedMax:est};
+}
+function updateCoastResultUI(result){
+  $("modelSampleCount").textContent=coastSamples.length;
+  if(!result){$("estimatedMaxRpm").textContent="--";$("modelName").textContent="不足";$("modelR2").textContent="--";return;}
+  $("estimatedMaxRpm").textContent=Math.round(result.estimatedMax);
+  $("modelName").textContent=result.name;
+  $("modelR2").textContent=result.r2.toFixed(2);
+}
+
 function loop(now){
   resize();
 
@@ -327,6 +418,7 @@ function loop(now){
   if(measuring){
     samples.push({t:now,rpm:Math.round(rpm),conf:confidence});
     samples=samples.filter(s=>now-s.t<=10000);
+    collectCoastSample(now);
     drawChart();
   }
 

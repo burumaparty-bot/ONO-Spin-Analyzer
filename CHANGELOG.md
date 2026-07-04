@@ -1,7 +1,6 @@
 # CHANGELOG
 
-## 700rpm Master
-- ユーザー実機確認で700rpm付近まで計測できた基準版
-- Clean Ver0.1.0 表示
-- ログなし
-- 今後の比較対象
+## Ver0.6-CoastPost
+- 700rpm Masterベース
+- 計測ロジック変更なし
+- 停止後に惰行モデル推定
