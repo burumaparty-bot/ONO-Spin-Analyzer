@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#08111f">
-<title>ONO Spin Analyzer Clean Ver0.1.0</title>
+<title>ONO Spin Analyzer Ver0.2-View</title>
 <style>
 :root{--bg:#07111f;--panel:#111827;--text:#f8fafc;--muted:#94a3b8;--gold:#facc15;--red:#ef4444;--green:#22c55e;--blue:#38bdf8;--orange:#fb923c}
 *{box-sizing:border-box}
@@ -29,12 +29,12 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
 </style>
 </head>
 <body>
-<div class="version">Clean Ver 0.1.0</div>
+<div class="version">Ver 0.2-View</div>
 <header>
  <div class="brand">ONOザウルス研究所 by ONOSOKKI</div>
  <div class="title">ONO Spin Analyzer</div>
- <div class="copy">高速計測優先・ログなし版</div>
- <div class="sub">ログ処理を完全に外し、計測安定性だけを確認します</div>
+ <div class="copy">700rpm Master＋リアルタイム解析表示</div>
+ <div class="sub">CSV保存なし。Δθ・Blob候補数などを画面表示して700rpm超の原因を確認します</div>
 </header>
 
 <div class="wrap">
@@ -49,7 +49,7 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <span id="phaseBadge" class="badge">IDLE</span>
   <div class="status" id="status">最初に「カメラ起動」を押してください。</div>
   <div class="bar"><div id="confFill" class="fill"></div></div>
-  <div class="small">この版はログ保存なしです。処理負荷を最小化し、純粋な計測性能を確認します。</div>
+  <div class="small">この版はCSV保存なしです。処理負荷を抑えながら、Δθ・Blob候補数・半径位置を表示します。</div>
  </section>
 
  <div class="camera">
@@ -67,6 +67,10 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <div class="card"><div class="label">Blob面積</div><div class="value"><span id="blobArea">0</span> <span class="unit">px</span></div></div>
   <div class="card"><div class="label">角度</div><div class="value"><span id="angleDeg">0</span> <span class="unit">deg</span></div></div>
   <div class="card"><div class="label">処理状態</div><div class="value"><span id="stateText">待機</span></div></div>
+  <div class="card"><div class="label">Δθ</div><div class="value"><span id="deltaDeg">0</span> <span class="unit">deg/frame</span></div></div>
+  <div class="card"><div class="label">Blob候補数</div><div class="value"><span id="blobCount">0</span> <span class="unit">個</span></div></div>
+  <div class="card"><div class="label">半径位置</div><div class="value"><span id="radialRate">0</span> <span class="unit">%</span></div></div>
+  <div class="card"><div class="label">計算RPM</div><div class="value"><span id="calcRpm">0</span> <span class="unit">rpm</span></div></div>
  </div>
 
  <div class="graph"><canvas id="chart"></canvas></div>
@@ -91,6 +95,7 @@ let stream=null, loopStarted=false, measuring=false;
 let rpm=0, maxRpm=0, lastRawAngle=null, unwrappedAngle=0, angleHist=[], lastCenter=null;
 let samples=[], frameTimes=[], measuredFps=0, reliableMaxRpm=0;
 let currentFeature=null, confidence=0, phase="IDLE";
+let debugDeltaDeg=0, debugBlobCount=0, debugRadialRate=0, debugCalcRpm=0;
 
 const defaults={yellowMin:80,blackMax:105,searchRadius:40,innerRate:16,fitWindow:260,maxValid:1200,minBlob:10};
 const settings={...defaults};
@@ -245,7 +250,8 @@ function detectBlackWeight(w,h){
   ctx.strokeStyle="rgba(56,189,248,.8)";ctx.beginPath();ctx.arc(cx,cy,6,0,Math.PI*2);ctx.stroke();
   if(inner>2){ctx.strokeStyle="rgba(255,255,255,.35)";ctx.beginPath();ctx.arc(cx,cy,inner,0,Math.PI*2);ctx.stroke();}
 
-  if(comps.length===0){currentFeature={phase:null,confidence:0,area:0,center:{x:cx,y:cy,r:radius}};confidence=0;return null;}
+  debugBlobCount=comps.length;
+  if(comps.length===0){currentFeature={phase:null,confidence:0,area:0,center:{x:cx,y:cy,r:radius}};confidence=0;debugRadialRate=0;return null;}
 
   let best=null,bestVal=-1;
   for(const c of comps){
@@ -267,6 +273,7 @@ function detectBlackWeight(w,h){
   ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(best.x,best.y);ctx.stroke();
 
   const radial=best.dist/radius;
+  debugRadialRate=Math.round(radial*100);
   const areaScore=Math.min(1,best.area/20);
   const radialScore=Math.max(0,Math.min(1,(radial-.42)/.45));
   confidence=Math.round(100*Math.min(1,areaScore*.45+radialScore*.35+best.fill*.20));
@@ -277,6 +284,7 @@ function detectBlackWeight(w,h){
 function updateAngle(angle,now){
   if(lastRawAngle===null){lastRawAngle=angle;unwrappedAngle=0;angleHist=[{t:now,a:0}];return;}
   const d=normalize(angle-lastRawAngle);
+  debugDeltaDeg=d*180/Math.PI;
   if(Math.abs(d)>0.008&&Math.abs(d)<3.12){
     unwrappedAngle+=d;
     angleHist.push({t:now,a:unwrappedAngle});
@@ -290,6 +298,7 @@ function updateAngle(angle,now){
       for(const p of angleHist){num+=(p.t-mt)*(p.a-ma);den+=(p.t-mt)*(p.t-mt);}
       if(den>0){
         const calc=Math.abs((num/den)*60000/(Math.PI*2));
+        debugCalcRpm=calc;
         if(calc<settings.maxValid){
           const jumpOk=rpm===0||Math.abs(calc-rpm)<Math.max(420,rpm*1.10);
           if(jumpOk){
@@ -337,6 +346,10 @@ function loop(now){
   $("blobArea").textContent=currentFeature?currentFeature.area:0;
   $("angleDeg").textContent=angle===null?"--":Math.round(angle*180/Math.PI);
   $("rpmCard").className="card "+(rpm>=900?"good":rpm>=700?"warn":"");
+  $("deltaDeg").textContent=isFinite(debugDeltaDeg)?debugDeltaDeg.toFixed(1):"0";
+  $("blobCount").textContent=debugBlobCount||0;
+  $("radialRate").textContent=debugRadialRate||0;
+  $("calcRpm").textContent=isFinite(debugCalcRpm)?Math.round(debugCalcRpm):0;
 
   requestAnimationFrame(loop);
 }
