@@ -1,18 +1,13 @@
-# ONO Spin Analyzer Ver0.1.1 Master
+# ONO Spin Analyzer Clean Ver0.1.0
 
-この版は、実験で 667rpm までは安定して計測できた基準版です。
+## 方針
+ログ機能なし。計測性能を優先したクリーン版です。
 
-## 重要
-- この `index.html` を Master として扱います。
-- 計測ロジックは変更しません。
-- 今後の Ver0.1.2 以降は、このファイルを基準に、ログ機能などを最小差分で追加します。
+## 理由
+CSVログや画像ログは、毎フレーム処理・メモリ確保・文字列生成により、
+スマホブラウザでは計測ループへ悪影響を与える可能性があります。
 
-## GitHub Pages
-リポジトリ直下に以下を配置してください。
+まずはこの版で、667rpm以上に行けるか確認します。
 
-- index.html
-- README.md
-- CHANGELOG.md
-
-公開URL:
-https://burumaparty-bot.github.io/ONO-Spin-Analyzer/
+## アップロード方法
+ZIPを展開し、`index.html` と `README.md` をGitHubリポジトリ直下へアップロードしてください。
