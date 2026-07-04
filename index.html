@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#08111f">
-<title>ONO Spin Analyzer Ver0.2-View</title>
+<title>ONO Spin Analyzer Ver0.2-ViewSlow</title>
 <style>
 :root{--bg:#07111f;--panel:#111827;--text:#f8fafc;--muted:#94a3b8;--gold:#facc15;--red:#ef4444;--green:#22c55e;--blue:#38bdf8;--orange:#fb923c}
 *{box-sizing:border-box}
@@ -29,12 +29,12 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
 </style>
 </head>
 <body>
-<div class="version">Ver 0.2-View</div>
+<div class="version">Ver 0.2-ViewSlow</div>
 <header>
  <div class="brand">ONOザウルス研究所 by ONOSOKKI</div>
  <div class="title">ONO Spin Analyzer</div>
- <div class="copy">700rpm Master＋リアルタイム解析表示</div>
- <div class="sub">CSV保存なし。Δθ・Blob候補数などを画面表示して700rpm超の原因を確認します</div>
+ <div class="copy">700rpm Master＋低速表示解析</div>
+ <div class="sub">CSV保存なし。Δθ・Blob候補数などを0.5秒ごとに表示し、目視しやすくします</div>
 </header>
 
 <div class="wrap">
@@ -49,7 +49,7 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <span id="phaseBadge" class="badge">IDLE</span>
   <div class="status" id="status">最初に「カメラ起動」を押してください。</div>
   <div class="bar"><div id="confFill" class="fill"></div></div>
-  <div class="small">この版はCSV保存なしです。処理負荷を抑えながら、Δθ・Blob候補数・半径位置を表示します。</div>
+  <div class="small">この版はCSV保存なしです。解析値は約0.5秒ごとに更新し、目視しやすくしています。</div>
  </section>
 
  <div class="camera">
@@ -96,6 +96,7 @@ let rpm=0, maxRpm=0, lastRawAngle=null, unwrappedAngle=0, angleHist=[], lastCent
 let samples=[], frameTimes=[], measuredFps=0, reliableMaxRpm=0;
 let currentFeature=null, confidence=0, phase="IDLE";
 let debugDeltaDeg=0, debugBlobCount=0, debugRadialRate=0, debugCalcRpm=0;
+let lastAnalysisUiUpdate=0;
 
 const defaults={yellowMin:80,blackMax:105,searchRadius:40,innerRate:16,fitWindow:260,maxValid:1200,minBlob:10};
 const settings={...defaults};
@@ -346,10 +347,14 @@ function loop(now){
   $("blobArea").textContent=currentFeature?currentFeature.area:0;
   $("angleDeg").textContent=angle===null?"--":Math.round(angle*180/Math.PI);
   $("rpmCard").className="card "+(rpm>=900?"good":rpm>=700?"warn":"");
-  $("deltaDeg").textContent=isFinite(debugDeltaDeg)?debugDeltaDeg.toFixed(1):"0";
-  $("blobCount").textContent=debugBlobCount||0;
-  $("radialRate").textContent=debugRadialRate||0;
-  $("calcRpm").textContent=isFinite(debugCalcRpm)?Math.round(debugCalcRpm):0;
+  // 解析値は目視できるように約0.5秒ごとに更新する
+  if(now-lastAnalysisUiUpdate>500){
+    lastAnalysisUiUpdate=now;
+    $("deltaDeg").textContent=isFinite(debugDeltaDeg)?debugDeltaDeg.toFixed(1):"0";
+    $("blobCount").textContent=debugBlobCount||0;
+    $("radialRate").textContent=debugRadialRate||0;
+    $("calcRpm").textContent=isFinite(debugCalcRpm)?Math.round(debugCalcRpm):0;
+  }
 
   requestAnimationFrame(loop);
 }
