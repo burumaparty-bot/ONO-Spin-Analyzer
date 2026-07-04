@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#08111f">
-<title>ONO Spin Analyzer Ver0.2-ViewSlow</title>
+<title>ONO Spin Analyzer Ver0.4-Candidate</title>
 <style>
 :root{--bg:#07111f;--panel:#111827;--text:#f8fafc;--muted:#94a3b8;--gold:#facc15;--red:#ef4444;--green:#22c55e;--blue:#38bdf8;--orange:#fb923c}
 *{box-sizing:border-box}
@@ -26,15 +26,26 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
 .row{display:grid;grid-template-columns:140px 1fr 62px;gap:8px;align-items:center;margin:10px 0}.row label{font-size:13px;color:var(--muted)}input[type=range]{width:100%}.num{text-align:right;font-variant-numeric:tabular-nums}.small{font-size:12px;color:var(--muted);line-height:1.55}
 .badge{display:inline-block;border:1px solid #475569;border-radius:999px;padding:4px 10px;color:#cbd5e1;font-size:12px;font-weight:900}.badge.on{color:#facc15;border-color:rgba(250,204,21,.55);box-shadow:0 0 18px rgba(250,204,21,.18)}
 .bar{height:16px;background:#1f2937;border-radius:999px;overflow:hidden;border:1px solid rgba(148,163,184,.35);margin-top:8px}.fill{height:100%;width:0%;background:linear-gradient(90deg,#ef4444,#fb923c,#22c55e);transition:width .08s}
+
+.value{
+  font-variant-numeric: tabular-nums;
+  font-feature-settings:"tnum";
+}
+#deltaDeg{
+  display:inline-block;
+  width:7ch;
+  text-align:right;
+}
+
 </style>
 </head>
 <body>
-<div class="version">Ver 0.2-ViewSlow</div>
+<div class="version">Ver 0.4-Candidate</div>
 <header>
  <div class="brand">ONOザウルス研究所 by ONOSOKKI</div>
  <div class="title">ONO Spin Analyzer</div>
- <div class="copy">700rpm Master＋低速表示解析</div>
- <div class="sub">CSV保存なし。Δθ・Blob候補数などを0.5秒ごとに表示し、目視しやすくします</div>
+ <div class="copy">700rpm超対策：候補選択ロジック</div>
+ <div class="sub">Blob候補が複数ある場合に、予測角度に近い候補を優先して選択します</div>
 </header>
 
 <div class="wrap">
@@ -49,7 +60,7 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <span id="phaseBadge" class="badge">IDLE</span>
   <div class="status" id="status">最初に「カメラ起動」を押してください。</div>
   <div class="bar"><div id="confFill" class="fill"></div></div>
-  <div class="small">この版はCSV保存なしです。解析値は約0.5秒ごとに更新し、目視しやすくしています。</div>
+  <div class="small">この版はCSV保存なしです。複数Blob候補から予測角度に近いものを選び、角度ジャンプを抑えます。</div>
  </section>
 
  <div class="camera">
@@ -71,6 +82,7 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <div class="card"><div class="label">Blob候補数</div><div class="value"><span id="blobCount">0</span> <span class="unit">個</span></div></div>
   <div class="card"><div class="label">半径位置</div><div class="value"><span id="radialRate">0</span> <span class="unit">%</span></div></div>
   <div class="card"><div class="label">計算RPM</div><div class="value"><span id="calcRpm">0</span> <span class="unit">rpm</span></div></div>
+  <div class="card"><div class="label">予測差</div><div class="value"><span id="predDiff">0</span> <span class="unit">deg</span></div></div>
  </div>
 
  <div class="graph"><canvas id="chart"></canvas></div>
@@ -96,7 +108,7 @@ let rpm=0, maxRpm=0, lastRawAngle=null, unwrappedAngle=0, angleHist=[], lastCent
 let samples=[], frameTimes=[], measuredFps=0, reliableMaxRpm=0;
 let currentFeature=null, confidence=0, phase="IDLE";
 let debugDeltaDeg=0, debugBlobCount=0, debugRadialRate=0, debugCalcRpm=0;
-let lastAnalysisUiUpdate=0;
+let lastAnalysisUiUpdate=0, debugPredDiffDeg=0;
 
 const defaults={yellowMin:80,blackMax:105,searchRadius:40,innerRate:16,fitWindow:260,maxValid:1200,minBlob:10};
 const settings={...defaults};
@@ -176,7 +188,7 @@ function normalize(d){while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI
 function isYellow(r,g,b){return r>settings.yellowMin&&g>settings.yellowMin&&b<settings.yellowMin*.9&&(r-b)>45&&(g-b)>35&&Math.abs(r-g)<95;}
 function isBlack(r,g,b){const br=(r+g+b)/3;return br<settings.blackMax&&r<settings.blackMax+18&&g<settings.blackMax+18&&b<settings.blackMax+18;}
 
-function detectBlackWeight(w,h){
+function detectBlackWeight(w,h,now){
   const cx0=w/2,cy0=h/2,sr=Math.min(w,h)*(settings.searchRadius/100);
   const img=ctx.getImageData(0,0,w,h),data=img.data;
 
@@ -254,18 +266,39 @@ function detectBlackWeight(w,h){
   debugBlobCount=comps.length;
   if(comps.length===0){currentFeature={phase:null,confidence:0,area:0,center:{x:cx,y:cy,r:radius}};confidence=0;debugRadialRate=0;return null;}
 
-  let best=null,bestVal=-1;
+  // 候補選択ロジック：
+  // 高速時は「前回角度に近い」だけではなく、直近の角速度から予測した角度に近いBlobを優先する。
+  let predictedAngle=lastRawAngle;
+  if(lastRawAngle!==null && angleHist.length>=4){
+    const n=angleHist.length;
+    const mt=angleHist.reduce((s,p)=>s+p.t,0)/n;
+    const ma=angleHist.reduce((s,p)=>s+p.a,0)/n;
+    let num=0,den=0;
+    for(const p of angleHist){num+=(p.t-mt)*(p.a-ma);den+=(p.t-mt)*(p.t-mt);}
+    if(den>0){
+      const omega=num/den; // rad/ms
+      const lastT=angleHist[angleHist.length-1].t;
+      predictedAngle=lastRawAngle + omega*Math.max(0,now-lastT);
+    }
+  }
+
+  let best=null,bestVal=-1,bestDiff=0;
   for(const c of comps){
     const radial=c.dist/radius;if(radial<.42)continue;
+    const a=Math.atan2(c.y-cy,c.x-cx);
     let continuity=1;
-    if(lastRawAngle!==null){
-      const a=Math.atan2(c.y-cy,c.x-cx);
-      const diff=Math.abs(normalize(a-lastRawAngle));
-      continuity=Math.max(.25,1.6-diff);
+    if(predictedAngle!==null){
+      const diff=Math.abs(normalize(a-predictedAngle));
+      bestDiff=diff;
+      // ±150〜180°ジャンプを起こす候補を弱くする。
+      // 完全除外ではなく強いペナルティにして、低速時の取りこぼしを避ける。
+      continuity=Math.max(.08,1.75-diff*0.95);
+      if(diff>2.45) continuity*=0.18;
     }
     const val=c.score*Math.pow(radial,1.8)*continuity*(.5+c.fill);
-    if(val>bestVal){bestVal=val;best=c;}
+    if(val>bestVal){bestVal=val;best=c;bestDiff=predictedAngle!==null?Math.abs(normalize(a-predictedAngle)):0;}
   }
+  debugPredDiffDeg=bestDiff*180/Math.PI;
   if(!best){currentFeature={phase:null,confidence:0,area:0,center:{x:cx,y:cy,r:radius}};confidence=0;return null;}
 
   ctx.strokeStyle="#22c55e";ctx.lineWidth=3;
@@ -330,7 +363,7 @@ function loop(now){
 
   if(video.readyState>=2){
     ctx.drawImage(video,0,0,w,h);
-    angle=detectBlackWeight(w,h);
+    angle=detectBlackWeight(w,h,now);
     if(angle!==null&&measuring) updateAngle(angle,now);
   }
 
@@ -347,13 +380,14 @@ function loop(now){
   $("blobArea").textContent=currentFeature?currentFeature.area:0;
   $("angleDeg").textContent=angle===null?"--":Math.round(angle*180/Math.PI);
   $("rpmCard").className="card "+(rpm>=900?"good":rpm>=700?"warn":"");
-  // 解析値は目視できるように約0.5秒ごとに更新する
+  // 解析値は目視しやすいように約0.5秒ごとに更新
   if(now-lastAnalysisUiUpdate>500){
     lastAnalysisUiUpdate=now;
-    $("deltaDeg").textContent=isFinite(debugDeltaDeg)?debugDeltaDeg.toFixed(1):"0";
+    $("deltaDeg").textContent=isFinite(debugDeltaDeg)?((debugDeltaDeg>=0?"+":"")+debugDeltaDeg.toFixed(1)):"0";
     $("blobCount").textContent=debugBlobCount||0;
     $("radialRate").textContent=debugRadialRate||0;
     $("calcRpm").textContent=isFinite(debugCalcRpm)?Math.round(debugCalcRpm):0;
+    $("predDiff").textContent=isFinite(debugPredDiffDeg)?debugPredDiffDeg.toFixed(0):0;
   }
 
   requestAnimationFrame(loop);
