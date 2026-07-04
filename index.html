@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#08111f">
-<title>ONO Spin Analyzer Ver0.5-Coast</title>
+<title>ONO Spin Analyzer Clean Ver0.1.0</title>
 <style>
 :root{--bg:#07111f;--panel:#111827;--text:#f8fafc;--muted:#94a3b8;--gold:#facc15;--red:#ef4444;--green:#22c55e;--blue:#38bdf8;--orange:#fb923c}
 *{box-sizing:border-box}
@@ -26,26 +26,15 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
 .row{display:grid;grid-template-columns:140px 1fr 62px;gap:8px;align-items:center;margin:10px 0}.row label{font-size:13px;color:var(--muted)}input[type=range]{width:100%}.num{text-align:right;font-variant-numeric:tabular-nums}.small{font-size:12px;color:var(--muted);line-height:1.55}
 .badge{display:inline-block;border:1px solid #475569;border-radius:999px;padding:4px 10px;color:#cbd5e1;font-size:12px;font-weight:900}.badge.on{color:#facc15;border-color:rgba(250,204,21,.55);box-shadow:0 0 18px rgba(250,204,21,.18)}
 .bar{height:16px;background:#1f2937;border-radius:999px;overflow:hidden;border:1px solid rgba(148,163,184,.35);margin-top:8px}.fill{height:100%;width:0%;background:linear-gradient(90deg,#ef4444,#fb923c,#22c55e);transition:width .08s}
-
-.value{
-  font-variant-numeric: tabular-nums;
-  font-feature-settings:"tnum";
-}
-#deltaDeg{
-  display:inline-block;
-  width:7ch;
-  text-align:right;
-}
-
 </style>
 </head>
 <body>
-<div class="version">Ver 0.5-Coast</div>
+<div class="version">Clean Ver 0.1.0</div>
 <header>
  <div class="brand">ONOザウルス研究所 by ONOSOKKI</div>
  <div class="title">ONO Spin Analyzer</div>
- <div class="copy">700rpm以下実測＋惰行モデル推定</div>
- <div class="sub">700rpm以下の信頼できる実測値から、その回転ごとの減速モデルを作成します</div>
+ <div class="copy">高速計測優先・ログなし版</div>
+ <div class="sub">ログ処理を完全に外し、計測安定性だけを確認します</div>
 </header>
 
 <div class="wrap">
@@ -60,7 +49,7 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <span id="phaseBadge" class="badge">IDLE</span>
   <div class="status" id="status">最初に「カメラ起動」を押してください。</div>
   <div class="bar"><div id="confFill" class="fill"></div></div>
-  <div class="small">700rpm以下を実測ゾーンとして扱い、毎回の惰行データから減速モデルを自動作成します。</div>
+  <div class="small">この版はログ保存なしです。処理負荷を最小化し、純粋な計測性能を確認します。</div>
  </section>
 
  <div class="camera">
@@ -78,14 +67,6 @@ video,canvas#overlay{position:absolute;inset:0;width:100%;height:100%;object-fit
   <div class="card"><div class="label">Blob面積</div><div class="value"><span id="blobArea">0</span> <span class="unit">px</span></div></div>
   <div class="card"><div class="label">角度</div><div class="value"><span id="angleDeg">0</span> <span class="unit">deg</span></div></div>
   <div class="card"><div class="label">処理状態</div><div class="value"><span id="stateText">待機</span></div></div>
-  <div class="card"><div class="label">Δθ</div><div class="value"><span id="deltaDeg">0</span> <span class="unit">deg/frame</span></div></div>
-  <div class="card"><div class="label">Blob候補数</div><div class="value"><span id="blobCount">0</span> <span class="unit">個</span></div></div>
-  <div class="card"><div class="label">半径位置</div><div class="value"><span id="radialRate">0</span> <span class="unit">%</span></div></div>
-  <div class="card"><div class="label">計算RPM</div><div class="value"><span id="calcRpm">0</span> <span class="unit">rpm</span></div></div>
-  <div class="card"><div class="label">推定RPM</div><div class="value"><span id="modelRpm">--</span> <span class="unit">rpm</span></div></div>
-  <div class="card"><div class="label">推定最大RPM</div><div class="value"><span id="modelMaxRpm">--</span> <span class="unit">rpm</span></div></div>
-  <div class="card"><div class="label">モデル点数</div><div class="value"><span id="modelPoints">0</span> <span class="unit">点</span></div></div>
-  <div class="card"><div class="label">推定モード</div><div class="value"><span id="modelMode">待機</span></div></div>
  </div>
 
  <div class="graph"><canvas id="chart"></canvas></div>
@@ -110,10 +91,6 @@ let stream=null, loopStarted=false, measuring=false;
 let rpm=0, maxRpm=0, lastRawAngle=null, unwrappedAngle=0, angleHist=[], lastCenter=null;
 let samples=[], frameTimes=[], measuredFps=0, reliableMaxRpm=0;
 let currentFeature=null, confidence=0, phase="IDLE";
-let debugDeltaDeg=0, debugBlobCount=0, debugRadialRate=0, debugCalcRpm=0;
-let lastAnalysisUiUpdate=0;
-let measureStartTime=0, lastModelSampleTime=0;
-let coastSamples=[], coastModel=null, modelRpm=null, modelMaxRpm=null;
 
 const defaults={yellowMin:80,blackMax:105,searchRadius:40,innerRate:16,fitWindow:260,maxValid:1200,minBlob:10};
 const settings={...defaults};
@@ -183,7 +160,7 @@ $("cameraBtn").onclick=initCamera;
 
 $("measureBtn").onclick=()=>{
   measuring=true; setPhase("TRACKING");
-  rpm=0; lastRawAngle=null; unwrappedAngle=0; angleHist=[]; samples=[]; coastSamples=[]; coastModel=null; modelRpm=null; modelMaxRpm=null; measureStartTime=performance.now(); lastModelSampleTime=0;
+  rpm=0; lastRawAngle=null; unwrappedAngle=0; angleHist=[]; samples=[];
   $("status").textContent="計測中。ログなし・高速優先モードです。";
 };
 $("stopBtn").onclick=()=>{measuring=false;setPhase("IDLE");$("status").textContent="停止しました。";};
@@ -268,8 +245,7 @@ function detectBlackWeight(w,h){
   ctx.strokeStyle="rgba(56,189,248,.8)";ctx.beginPath();ctx.arc(cx,cy,6,0,Math.PI*2);ctx.stroke();
   if(inner>2){ctx.strokeStyle="rgba(255,255,255,.35)";ctx.beginPath();ctx.arc(cx,cy,inner,0,Math.PI*2);ctx.stroke();}
 
-  debugBlobCount=comps.length;
-  if(comps.length===0){currentFeature={phase:null,confidence:0,area:0,center:{x:cx,y:cy,r:radius}};confidence=0;debugRadialRate=0;return null;}
+  if(comps.length===0){currentFeature={phase:null,confidence:0,area:0,center:{x:cx,y:cy,r:radius}};confidence=0;return null;}
 
   let best=null,bestVal=-1;
   for(const c of comps){
@@ -291,7 +267,6 @@ function detectBlackWeight(w,h){
   ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(best.x,best.y);ctx.stroke();
 
   const radial=best.dist/radius;
-  debugRadialRate=Math.round(radial*100);
   const areaScore=Math.min(1,best.area/20);
   const radialScore=Math.max(0,Math.min(1,(radial-.42)/.45));
   confidence=Math.round(100*Math.min(1,areaScore*.45+radialScore*.35+best.fill*.20));
@@ -302,7 +277,6 @@ function detectBlackWeight(w,h){
 function updateAngle(angle,now){
   if(lastRawAngle===null){lastRawAngle=angle;unwrappedAngle=0;angleHist=[{t:now,a:0}];return;}
   const d=normalize(angle-lastRawAngle);
-  debugDeltaDeg=d*180/Math.PI;
   if(Math.abs(d)>0.008&&Math.abs(d)<3.12){
     unwrappedAngle+=d;
     angleHist.push({t:now,a:unwrappedAngle});
@@ -316,7 +290,6 @@ function updateAngle(angle,now){
       for(const p of angleHist){num+=(p.t-mt)*(p.a-ma);den+=(p.t-mt)*(p.t-mt);}
       if(den>0){
         const calc=Math.abs((num/den)*60000/(Math.PI*2));
-        debugCalcRpm=calc;
         if(calc<settings.maxValid){
           const jumpOk=rpm===0||Math.abs(calc-rpm)<Math.max(420,rpm*1.10);
           if(jumpOk){
@@ -328,56 +301,6 @@ function updateAngle(angle,now){
     }
   }
   lastRawAngle=angle;
-}
-
-
-function fitLinearModel(points){
-  if(points.length<12)return null;
-  const t0=points[0].t;
-  const arr=points.map(p=>({x:(p.t-t0)/1000, y:p.rpm}));
-  const n=arr.length;
-  const sx=arr.reduce((s,p)=>s+p.x,0);
-  const sy=arr.reduce((s,p)=>s+p.y,0);
-  const sxx=arr.reduce((s,p)=>s+p.x*p.x,0);
-  const sxy=arr.reduce((s,p)=>s+p.x*p.y,0);
-  const den=n*sxx-sx*sx;
-  if(Math.abs(den)<1e-9)return null;
-  const b=(n*sxy-sx*sy)/den;
-  const a=(sy-b*sx)/n;
-  if(b>=-1)return null;
-  const mean=sy/n;
-  let ssTot=0, ssRes=0;
-  for(const p of arr){
-    const pred=a+b*p.x;
-    ssTot+=(p.y-mean)*(p.y-mean);
-    ssRes+=(p.y-pred)*(p.y-pred);
-  }
-  const r2=ssTot>0 ? 1-ssRes/ssTot : 0;
-  return {type:"linear",t0,a,b,r2,n};
-}
-function evalCoastModel(model,t){
-  if(!model)return null;
-  const x=(t-model.t0)/1000;
-  return model.a+model.b*x;
-}
-function updateCoastModel(now){
-  const trusted = measuring && rpm>=200 && rpm<=700 && confidence>=35;
-  if(trusted && now-lastModelSampleTime>100){
-    lastModelSampleTime=now;
-    coastSamples.push({t:now,rpm:rpm});
-    if(coastSamples.length>80)coastSamples.shift();
-    const model=fitLinearModel(coastSamples);
-    if(model && model.r2>0.90){
-      coastModel=model;
-      modelRpm=evalCoastModel(coastModel,now);
-      modelMaxRpm=evalCoastModel(coastModel,measureStartTime);
-      if(modelMaxRpm<maxRpm)modelMaxRpm=maxRpm;
-    }
-  }else if(coastModel){
-    modelRpm=evalCoastModel(coastModel,now);
-    modelMaxRpm=evalCoastModel(coastModel,measureStartTime);
-    if(modelMaxRpm<maxRpm)modelMaxRpm=maxRpm;
-  }
 }
 
 function loop(now){
@@ -404,7 +327,6 @@ function loop(now){
   if(measuring){
     samples.push({t:now,rpm:Math.round(rpm),conf:confidence});
     samples=samples.filter(s=>now-s.t<=10000);
-    updateCoastModel(now);
     drawChart();
   }
 
@@ -415,17 +337,6 @@ function loop(now){
   $("blobArea").textContent=currentFeature?currentFeature.area:0;
   $("angleDeg").textContent=angle===null?"--":Math.round(angle*180/Math.PI);
   $("rpmCard").className="card "+(rpm>=900?"good":rpm>=700?"warn":"");
-  if(now-lastAnalysisUiUpdate>500){
-    lastAnalysisUiUpdate=now;
-    $("deltaDeg").textContent=isFinite(debugDeltaDeg)?((debugDeltaDeg>=0?"+":"")+debugDeltaDeg.toFixed(1)):"0";
-    $("blobCount").textContent=debugBlobCount||0;
-    $("radialRate").textContent=debugRadialRate||0;
-    $("calcRpm").textContent=isFinite(debugCalcRpm)?Math.round(debugCalcRpm):0;
-    $("modelPoints").textContent=coastSamples.length||0;
-    $("modelRpm").textContent=modelRpm===null?"--":Math.max(0,Math.round(modelRpm));
-    $("modelMaxRpm").textContent=modelMaxRpm===null?"--":Math.max(0,Math.round(modelMaxRpm));
-    $("modelMode").textContent=coastModel?("推定 R2="+coastModel.r2.toFixed(2)):(coastSamples.length>=12?"判定中":"待機");
-  }
 
   requestAnimationFrame(loop);
 }
